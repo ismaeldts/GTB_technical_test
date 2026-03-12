@@ -1,0 +1,37 @@
+{
+  "crear_sucursal": {
+    "descripcion": "POST /api/sucursales",
+    "request": {
+      "nombre": "Sucursal Centro",
+      "direccion": "Calle 100 #15-20",
+      "ciudad": "Bogotá",
+      "telefono": "3001234567"
+    },
+    "response_esperado": {
+      "id": 1,
+      "nombre": "Sucursal Centro",
+      "direccion": "Calle 100 #15-20",
+      "ciudad": "Bogotá",
+      "telefono": "3001234567"
+    }
+  },
+  "actualizar_sucursal": {
+    "descripcion": "PUT /api/sucursales/1",
+    "request": {
+      "nombre": "Sucursal Centro Actualizada",
+      "direccion": "Carrera 7 #45-10",
+      "ciudad": "Bogotá",
+      "telefono": "3009876543"
+    }
+  },
+  "obtener_por_id": {
+    "descripcion": "GET /api/sucursales/1"
+  },
+  "obtener_todos": {
+    "descripcion": "GET /api/sucursales"
+  },
+  "eliminar": {
+    "descripcion": "DELETE /api/sucursales/1"
+  }
+}
+
