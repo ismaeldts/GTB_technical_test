@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Prueba Tecnica - Backend Escalable con ALB, ASG y WAF
+
+Parameters:
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Password para la base de datos RDS.
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64'
+  VpcId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: Selecciona tu VPC (debe tener subnets publicas).
+  Subnets:
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    Description: Lista de Subnets publicas (selecciona al menos 2 para el Load Balancer).
+
+Resources:
+  # 1. SEGURIDAD
+  LBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permite trafico HTTP externo al Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permite trafico solo desde el Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !GetAtt LBSecurityGroup.GroupId
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Acceso a DB desde el Backend
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !GetAtt BackendSecurityGroup.GroupId
+
+  # 2. INFRAESTRUCTURA DE RED (ALB)
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets: !Ref Subnets
+      SecurityGroups:
+        - !GetAtt LBSecurityGroup.GroupId
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /health # Asegúrate de que tu app tenga este endpoint
+      Name: backend-tg
+      Port: 8080
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !Ref VpcId
+
+  # 3. AUTO SCALING (ASG)
+  BackendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: t2.micro
+        SecurityGroupIds:
+          - !GetAtt BackendSecurityGroup.GroupId
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            dnf update -y
+            dnf install -y docker
+            systemctl start docker
+            systemctl enable docker
+            
+            DB_HOST=${MyDatabase.Endpoint.Address}
+            DB_URL="jdbc:postgresql://$DB_HOST:5432/postgres"
+            
+            docker run -d \
+              -p 8080:8080 \
+              -e DB_URL=$DB_URL \
+              -e DB_USERNAME="adminuser" \
+              -e DB_PASSWORD="${DBPassword}" \
+              -e JWT_SECRET="cGFzc3dvcmRTZWNyZXRLZXlCVEdUZXN0MjAyNlZlcnlMb25nU2VjcmV0S2V5Rm9ySldU" \
+              --name backend-app \
+              ismaeltrochas/btg-technical-test:latest
+
+  BackendASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BackendLaunchTemplate
+        Version: !GetAtt BackendLaunchTemplate.LatestVersionNumber
+      MaxSize: '3'
+      MinSize: '1'
+      DesiredCapacity: '2'
+      VPCZoneIdentifier: !Ref Subnets
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+
+  # Añade esto en la sección de Resources
+  MyDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnets para la base de datos"
+      SubnetIds: !Ref Subnets # Esto obliga a la DB a usar las mismas subnets que el ALB
+
+# Y actualiza tu recurso MyDatabase para que lo use:
+  MyDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: '20'
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      MasterUsername: adminuser
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref MyDBSubnetGroup # <--- ESTO ES LA CLAVE
+      VPCSecurityGroups:
+        - !GetAtt DBSecurityGroup.GroupId
+      PubliclyAccessible: false
+
+  # 5. WAF (Web Application Firewall)
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: BackendWebACL
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: BackendWebACLMetric
+      Rules:
+        - Name: AWS-AWSManagedRulesCommonRuleSet
+          Priority: 0
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSetMetric
+
+  WAFAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref ApplicationLoadBalancer
+      WebACLArn: !GetAtt WebACL.Arn
+
+Outputs:
+  LoadBalancerDNS:
+    Description: URL pública para acceder al servicio
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
