@@ -1,6 +1,6 @@
-create schema PUNTOLL;
+create schema GTB;
 
-SET search_path TO PUNTOLL;
+SET search_path TO GTB;
 
 CREATE TABLE IF NOT EXISTS cliente (
     id BIGINT PRIMARY KEY,
