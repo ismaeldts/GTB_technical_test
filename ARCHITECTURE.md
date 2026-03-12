@@ -539,6 +539,20 @@ El volumen de datos esperado (clientes, fondos, suscripciones) es de **escala mo
 
 ---
 
+## Infraestructura AWS (IaC)
+
+La solución se despliega en AWS mediante **CloudFormation** con una arquitectura **altamente disponible y Multi-AZ**:
+
+- **ALB** → Balanceo de carga entre múltiples AZs
+- **ASG** → Auto Scaling con 2 instancias EC2 (Docker) distribuidas en 2 AZs
+- **RDS PostgreSQL** → Base de datos con subnet group Multi-AZ
+- **WAF** → Protección OWASP (SQL Injection, XSS, etc.)
+- **Security Groups** → Defensa en profundidad por capas
+
+> 📄 Documentación completa de la infraestructura: **[INFRASTRUCTURE.md](./INFRASTRUCTURE.md)**
+
+---
+
 ## Punto 2 – Consulta SQL
 
 En la carpeta `punto2/` se encuentra el archivo `consulta_punto2.sql` que resuelve el segundo punto de la prueba técnica.
